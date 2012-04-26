@@ -1,0 +1,1038 @@
+PARSER_BEGIN(C2jvm)
+
+package Cminusminus;
+import java.util.*;
+import java.lang.Integer;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.io.FileNotFoundException;
+ 
+
+public class C2jvm{
+
+    private static SymbolTreeNode root = new SymbolTreeNode();
+    private static SymbolTreeNode currentNode = root;
+
+    private static Boolean function_definition = false;
+    private static SymbolTreeNode function_definition_node = new SymbolTreeNode();
+	
+
+	private static int recoveredErrors = 0;
+    private static String var = new String();
+    private static String type = new String();
+    private static String size = "0";
+    private static Boolean struct_ = false;
+    private static String op = "";
+    private static String struct_being_defined = new String();
+    private static String var_being_accessed = new String();
+    
+    private static Boolean function_call = false;
+    private static Boolean function_call_error = false;
+    private static String function_being_called = "";
+    private static String rvalue_type = "";
+    private static Stack<ArrayList<Var> > expected_parameters = new Stack<ArrayList<Var> >();
+    private static Stack<Integer> expected_parameters_indexes = new Stack<Integer>();
+    
+    private static String currentOperationType = "";
+
+    // Run the parser
+    public static void main ( String args [ ] ) throws FileNotFoundException{
+		
+		
+		C2jvm parser ;
+
+	      
+
+		if(args.length == 0){
+			System.out.println("C-- Parser Version 0.3:  Reading from standard input . . .");
+			parser = new C2jvm(System.in);
+		}
+		else if(args.length == 1){
+			System.out.println("C-- Parser Version 0.3:  Reading from file " + args[0] + " . . ." );
+			try {
+				parser = new C2jvm(new java.io.FileInputStream(args[0]));
+			}
+			catch(java.io.FileNotFoundException e){
+				System.out.println("C-- Parser Version 0.3:  File " + args[0] + " not found.");
+				return ;
+	        }
+		}
+		else {
+			System.out.println("C-- Parser Version 0.3:  Usage is one of:");
+			System.out.println("         java CParser < inputfile");
+			System.out.println("OR");
+			System.out.println("         java CParser inputfile");
+			return ;
+		}
+		try {
+			//include io functions
+			SymbolTreeNode print = new SymbolTreeNode();
+			SymbolTreeNode println = new SymbolTreeNode();
+			SymbolTreeNode printStr = new SymbolTreeNode();
+			SymbolTreeNode printFloat = new SymbolTreeNode();
+			SymbolTreeNode read = new SymbolTreeNode();
+			
+			print.setFunctionName("print");
+			print.setReturnType("void");
+			print.addFunctionParameter("c", "String", 0, false);
+			print.addFunctionParameter("a", "int", 0, false);
+			
+			println.setFunctionName("println");
+			println.setReturnType("void");
+			
+			printStr.setFunctionName("printStr");
+			printStr.setReturnType("void");
+			printStr.addFunctionParameter("c", "String", 0, false);
+			
+			printFloat.setFunctionName("printFloat");
+			printFloat.setReturnType("void");
+			printFloat.addFunctionParameter("c", "String", 0, false);
+			printFloat.addFunctionParameter("a", "float", 0, false);
+			
+			read.setFunctionName("read");
+			read.setReturnType("int");
+			
+			root.addSon(print);
+			root.addSon(println);
+			root.addSon(printStr);
+			root.addSon(printFloat);
+			root.addSon(read);
+			
+			
+			SimpleNode treeRoot = parser.Start();
+			if(recoveredErrors > 0)
+			{
+				System.out.println("C-- Parser Version 0.3:  Encountered errors during parse.");
+			}
+			else
+			{
+				treeRoot.dump("");
+				System.out.println( "\nSymbol Table:\n\n" + root.toString(0) + "\n");
+				System.out.println("C-- Parser Version 0.3:  Java program parsed successfully.");
+				System.out.println("C-- Parser Version 0.3:  Linking...");
+				
+				String filename = args.length > 0 ? args[0] : "a";
+				int last = filename.lastIndexOf('.');
+				filename = filename.substring(0, last > 0 ? last : filename.length());
+				CodeGenerator.assignRegisters(root, 0);
+				String jasmin_code = CodeGenerator.generateCode(filename, treeRoot, root);
+				
+				File file = new File(filename+".j");
+				PrintStream printStream = new PrintStream(new FileOutputStream(file));
+				printStream.print(jasmin_code);
+			
+				try 
+				{
+					Runtime rt = Runtime.getRuntime();  
+					rt.exec("java -jar jasmin.jar "+ filename + ".j");
+				} 
+				catch (Exception e) 
+				
+				{
+					e.printStackTrace();
+				}
+				System.out.println("C-- Parser Version 0.3: Complete!");
+
+				
+			}
+		}
+		catch(ParseException e){
+			System.out.println("C-- Parser Version 0.3:  Encountered errors during parse.");
+			e.printStackTrace();
+		}
+    }
+}
+
+PARSER_END(C2jvm)
+
+SKIP : {
+	" "
+	|  "\t"
+	|  "\n"
+	|  "\r"
+	|  <"//" (~["\n","\r"])* ("\n" | "\r" | "\r\n")>
+	|  <"/*" (~["*"])* "*" ("*" | ~["*","/"] (~["*"])* "*")* "/">
+	| "#" : PREPROCESSOR_OUTPUT
+}
+
+<PREPROCESSOR_OUTPUT> SKIP:
+{
+	"\n" : DEFAULT
+}
+
+<PREPROCESSOR_OUTPUT> MORE:
+{
+	"\\\n"
+	| "\\\r\n"
+	| < ~[] >
+}
+ 
+
+TOKEN : {
+	<INTEGER_LITERAL: <DECIMAL_LITERAL> (["l","L"])? | <HEX_LITERAL> (["l","L"])? | <OCTAL_LITERAL> (["l","L"])?>
+	|  <#DECIMAL_LITERAL:["1"-"9"] (["0"-"9"])*>
+	|  <#HEX_LITERAL: "0" ["x","X"] (["0"-"9","a"-"f","A"-"F"])+>
+	|  <#OCTAL_LITERAL: "0" (["0"-"7"])*>
+	|  <FLOATING_POINT_LITERAL: (["0"-"9"])+ "." (["0"-"9"])* (<EXPONENT>)? (["f","F","d","D"])? | "." (["0"-"9"])+ (<EXPONENT>)? (["f","F","d","D"])? | (["0"-"9"])+ <EXPONENT> (["f","F","d","D"])? | (["0"-"9"])+ (<EXPONENT>)? ["f","F","d","D"]>
+	|  <#EXPONENT: ["e","E"] (["+","-"])? (["0"-"9"])+>
+	|  <CHARACTER_LITERAL: "\'" (~["\'","\\","\n","\r"] | "\\" (["n","t","b","r","f","\\","\'","\""] | ["0"-"7"] (["0"-"7"])? | ["0"-"3"] ["0"-"7"] ["0"-"7"])) "\'">
+	|  <STRING_LITERAL: "\"" ( ~["\"","\\","\n","\r"] | "\\" ( ["n","t","b","r","f","\\","\'","\""] | ["0"-"7"] (["0"-"7"])?  | ["0"-"3"] ["0"-"7"] ["0"-"7"] | ( ["\n","\r"] | "\r\n")))* "\"">
+	|  <INTEGER_ARRAY: "{" <INTEGER_LITERAL> ( "," <INTEGER_LITERAL> )* "}">
+	|  <FLOAT_ARRAY: "{" <FLOATING_POINT_LITERAL> ( "," <FLOATING_POINT_LITERAL> )* "}">
+}
+
+TOKEN : {
+	<FLOAT: "float" > |
+	<STRING: "String"> |
+	<ELSE: "else"> |
+	<RETURN: "return"> |
+	<STRUCT: "struct"> |
+	<WHILE: "while"> |
+	<VOID: "void"> |
+	<INT: "int"> |
+	<IF: "if">
+}
+
+TOKEN : {
+	<IDENTIFIER: <LETTER> (<LETTER> | <DIGIT>)*>
+	| <#LETTER: ["$","A"-"Z","_","a"-"z"]>
+	| <#DIGIT: ["0"-"9"]>
+}
+
+
+SimpleNode Start(): {}
+{
+	TranslationUnit() {return jjtThis;}
+}
+
+void TranslationUnit() : {}
+{
+	(Declaration())+ <EOF>
+}
+
+void Declaration() : {}
+{
+	LOOKAHEAD(4)
+	ExternalDeclaration()
+	| FunctionDefinition()
+}
+
+
+void ExternalDeclaration() : {}
+{
+	LOOKAHEAD(VarType() SubInternalDeclaration() )
+	
+	VarType() (SubExternalDeclaration() ( "," SubExternalDeclaration() )* ) ";"
+	|
+	StructDeclaration()
+}
+
+void SubExternalDeclaration() : {}
+{
+	VarIdentifier() [ArraySizeDeclaration()] [ SubExternalDeclarationAssignment() ]
+	
+	{ 
+		if(!currentNode.isDefinedType(type) || currentNode.isDefinedVar(var))
+		{ 
+			recoveredErrors++; 	
+			System.out.println("Undefined type or redefined variable at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		else
+		{
+			currentNode.addVar(var, type, Integer.parseInt(size), struct_);
+			size = "0";
+			struct_ = false;
+		}
+	}
+}
+
+void SubExternalDeclarationAssignment() : {Token t;}
+{
+	"=" 
+	(
+		(	t = <INTEGER_LITERAL> | t = <FLOATING_POINT_LITERAL>   )
+		{
+			if(type != "float" && type != "int")
+			{
+				recoveredErrors++; 	
+				System.out.println("Variable Initiation has incorrect type at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+			jjtThis.val = t.image;
+		}
+		|
+		(   t = <STRING_LITERAL>   )
+		{
+			if(type != "String" )
+			{
+				recoveredErrors++; 	
+				System.out.println("Variable Initiation has incorrect type at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+			jjtThis.val = t.image;
+		}
+	)
+}
+
+void ArraySizeDeclaration() : { Token t;}
+{
+	"["
+	t = <INTEGER_LITERAL>
+	"]"
+	{
+		jjtThis.val = t.image;
+		size = t.image;
+	}
+}
+
+
+void VarIdentifier() : {Token t;}
+{
+	t = <IDENTIFIER>
+	{
+		jjtThis.val = t.image;
+		var = t.image;
+	}
+}
+
+void InternalDeclaration() : {}
+{	
+	
+	LOOKAHEAD(VarType() SubInternalDeclaration() )
+	VarType() SubInternalDeclaration() ( "," SubInternalDeclaration() )*  ";"
+	|
+	StructDeclaration()
+}
+
+void SubInternalDeclaration() : {}
+{
+	
+	VarIdentifier() [ArraySizeDeclaration()] ["=" 
+	{
+		currentOperationType = type;
+	}
+	Operation() 
+	{
+		currentOperationType = "";
+	}
+	]
+	
+	{ 
+		if(!currentNode.isDefinedType(type) || currentNode.isDefinedVarWithinScope(var) || currentNode.isParameter(var))
+		{
+			recoveredErrors++;System.out.println("Undefined type or redefined variable at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		currentNode.addVar(var, type, Integer.parseInt(size), struct_);
+		size = "0";
+		struct_ = false;	
+	}
+}
+
+
+void StructDeclaration() : {Token t;}
+{
+
+	StructTypeDeclaration() 
+	{
+		if(currentNode.isDefinedType(struct_being_defined))
+		{
+			recoveredErrors++; System.out.println("Undefined type at line " + token.beginLine + ", column " + token.beginColumn);
+			t = getNextToken();
+			while(t.image != "}")
+				t = getNextToken();
+		}
+		else
+		{
+			currentNode.addType(struct_being_defined);
+		}
+	}
+	["{" (StructVarDeclaration())* "}"] [t = <IDENTIFIER> { 
+																if(currentNode.isDefinedVar(t.image))
+																{
+																	recoveredErrors++;
+																	System.out.println("Undefined type or redefined variable at line " + token.beginLine + ", column " + token.beginColumn);
+																}
+																else
+																{
+																	currentNode.addVar(t.image, struct_being_defined, 0, true);
+																}
+																
+															}
+															]";"
+		
+
+}
+
+void StructVarDeclaration() : {}
+{
+	//TODO type definition check
+	LOOKAHEAD(4)
+	StructDeclaration()
+	| VarType() (SubStructVarDeclaration() ( "," SubStructVarDeclaration() )* ) ";"
+}
+
+void SubStructVarDeclaration() : {}	 
+{
+	VarIdentifier() [ArraySizeDeclaration()] ["=" SubExpression() ]
+	
+	{ 
+		if(!currentNode.isDefinedType(type) || currentNode.isDefinedStructVar(struct_being_defined, var))
+		{ 
+			recoveredErrors++;System.out.println("Undefined type or duplicate variable within a struct at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		currentNode.addStructVar(struct_being_defined, type, var, Integer.parseInt(size), struct_);
+		size = "0";
+		struct_ = false;	
+	}	
+}
+
+void StructTypeDeclaration() : {Token t1,t2;}
+{   
+	t1 = <STRUCT> 
+	t2 = <IDENTIFIER>
+	{
+		if(currentNode.isDefinedType(t2.image))
+		{
+			recoveredErrors++;System.out.println("Redefinition of struct at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		struct_being_defined = t2.image;
+		jjtThis.val = t1.image + " " + t2.image;
+	}
+}
+
+
+void FunctionDefinition() : {}
+{
+	{function_definition_node = new SymbolTreeNode(); }
+	ReturnType() {function_definition_node.setReturnType(type);} 
+	FunctionIdentifier() {if(currentNode.isDefinedFunctionName(function_being_called))
+							{
+								System.out.println("Redefinition of function at line " + token.beginLine + ", column " + token.beginColumn);
+								recoveredErrors++;;
+							}
+							function_definition_node.setFunctionName(function_being_called);}
+	"(" ParameterDefinitionList() ")"  
+	{function_definition = true; 
+	root.addSon(function_definition_node);
+	currentNode = function_definition_node;}
+	"{"  FunctionBody() "}"  
+		
+	//[LOOKAHEAD(DeclarationSpecifiers()) DeclarationSpecifiers()] Declarator() [ DeclarationList() ]
+	//CompoundStatement()
+}
+
+void FunctionIdentifier() : {Token t;}
+{
+	t = <IDENTIFIER>
+	{
+		jjtThis.val = t.image;
+		function_being_called = t.image;
+	}
+}
+
+
+void VarType():{Token t1;}
+{
+	(t1 = <INT>| t1 = <VOID> | t1 = <FLOAT> | t1 = <STRING>)
+	{
+		jjtThis.val = t1.image;
+		type = t1.image;
+	}
+	| StructType()
+	|
+	t1 = <IDENTIFIER>
+	{
+		type = t1.image;
+	}
+}
+
+void ReturnType() : {Token t1;}
+{
+	(t1 = <INT>| t1 = <VOID> | t1 = <FLOAT> | t1 = <STRING> )
+	{
+		jjtThis.val = t1.image;
+		type = t1.image;
+	}
+	| StructType()
+	| 
+	t1 = <IDENTIFIER>
+	{
+		type = t1.image;
+	}	
+}
+
+void StructType() : {Token t1,t2;}
+{   
+	t1 = <STRUCT> 
+	t2 = <IDENTIFIER>
+	{
+		if(!currentNode.isDefinedType(t2.image))
+		{
+			recoveredErrors++;
+			System.out.println("Undefined type at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		type = t2.image;
+		struct_ = true;
+		jjtThis.val = t1.image + " " + t2.image;
+	}
+}
+
+
+void ParameterDefinitionList() : {}
+{
+	[ VarType() VarIdentifier() [ "[" "]" {size = "1";}]
+	{ 
+		if(!currentNode.isDefinedType(type) || function_definition_node.getParameters().containsKey(var))
+		{
+			recoveredErrors++;
+			System.out.println("Duplicate Parameters or Undefined type in line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		function_definition_node.addFunctionParameter(var, type, Integer.parseInt(size), struct_); 
+		size = "-1";
+	}
+	(LOOKAHEAD(2)"," VarType() VarIdentifier() [ "[" "]" {size = "1";}]
+	{ 
+		if(!currentNode.isDefinedType(type) || function_definition_node.getParameters().containsKey(var))
+		{
+			recoveredErrors++;
+			System.out.println("Duplicate Parameters or Undefined type in line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		function_definition_node.addFunctionParameter(var, type, Integer.parseInt(size), struct_);
+		size = "-1"; 
+	}
+	)*]
+}
+
+void ParameterList() : {String aux;} 
+{
+	
+	[ LOOKAHEAD(Operation())
+	{
+		if(!function_call_error)
+		{
+			if(expected_parameters.peek().get(expected_parameters_indexes.peek()).getSize() > 0)
+				currentOperationType = "[" + expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+			else
+				currentOperationType = expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+		}
+	}
+	Operation()
+	{
+		if(!function_call_error)
+		{
+			if(expected_parameters.peek().size() <= expected_parameters_indexes.peek())
+			{
+				function_call_error= true;
+				recoveredErrors++;
+				System.out.println("Parameter count exceeded at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+			else
+			{
+					if(expected_parameters.peek().get(expected_parameters_indexes.peek()).getSize() > 0)
+						aux = "[" + expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+					else
+						aux = expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+		
+				if(!rvalue_type.equals(aux))
+				{
+					function_call_error = true;
+					recoveredErrors++;
+					System.out.println("Incorrect Parameter Type at line " + token.beginLine + ", column " + token.beginColumn);
+				}
+			}
+		}
+		expected_parameters_indexes.push(expected_parameters_indexes.pop() + 1);
+	}
+	("," 
+	{
+		if(!function_call_error)
+		{
+			if(expected_parameters.peek().get(expected_parameters_indexes.peek()).getSize() > 0)
+				currentOperationType = "[" + expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+			else
+				currentOperationType = expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+		}
+	}
+	Operation()
+	{
+		if(!function_call_error)
+		{
+			if(expected_parameters.peek().size() <= expected_parameters_indexes.peek())
+			{
+				function_call_error= true;
+				recoveredErrors++;
+				System.out.println("Parameter count exceeded at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+			else
+			{
+				if(expected_parameters.peek().get(expected_parameters_indexes.peek()).getSize() > 0)
+				aux = "[" + expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+					else
+				aux = expected_parameters.peek().get(expected_parameters_indexes.peek()).getType();
+		
+				if(!rvalue_type.equals(aux)){
+					function_call_error = true;
+					recoveredErrors++;
+					System.out.println("Incorrect Parameter Type at line " + token.beginLine + ", column " + token.beginColumn);
+				}
+			}
+		}
+		expected_parameters_indexes.push(expected_parameters_indexes.pop() + 1);
+	}
+	)* ]
+	{
+		if(expected_parameters.peek().size() > expected_parameters_indexes.peek())
+		{
+			function_call_error = true;
+			recoveredErrors++;
+			System.out.println("Incomplete Parameters at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+	}
+			
+}
+
+void FunctionBody() : {}
+{
+	{
+		if(function_definition)
+		{
+			function_definition = false;
+		}
+		else
+		{
+			currentNode = currentNode.addSon();
+		}
+	}
+	(  LOOKAHEAD(InternalDeclaration()) InternalDeclaration()  | Statement() )*
+	{currentNode = currentNode.goUp();}
+}
+
+void Statement() :{}
+{	
+	LOOKAHEAD(2) IterationStatement()
+	| LOOKAHEAD(2) SelectionStatement()
+	| LOOKAHEAD(2) CompoundStatement()
+	| LOOKAHEAD(2) JumpStatement()
+	|
+	ExpressionStatement()
+}
+
+void JumpStatement(): {}
+{
+	<RETURN> [
+	{
+		currentOperationType = "";
+	}
+	Operation()
+	{
+		if(!currentOperationType.equals(currentNode.getReturnType()))
+		{
+			if(
+			!((currentOperationType.equals("int") && currentNode.getReturnType().equals("float"))
+			|| 
+			(currentOperationType.equals("float") && currentNode.getReturnType().equals("int"))
+			))
+			{
+			recoveredErrors++;
+			System.out.println("Incorrect Return type at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+		}
+	}
+	] ";"
+}
+
+
+void CompoundStatement() : {}
+{
+	"{"
+	FunctionBody()
+	"}"
+}
+
+void SelectionStatement() : {}
+{
+	IfStatement() [ LOOKAHEAD(2) ElseStatement() ]
+}
+  
+void IfStatement() : {}
+{
+	<IF> "(" Operation() ")" ( LOOKAHEAD(2) ("{" FunctionBody() "}") | Statement()  )
+}
+
+void ElseStatement() : {}
+{
+	<ELSE> ( LOOKAHEAD(2) ("{" FunctionBody() "}") | Statement())
+}
+
+void IterationStatement() : {}
+{
+	<WHILE> "(" Operation() ")" ( LOOKAHEAD(2) ( "{" FunctionBody() "}") | (Statement() ) )
+}
+
+void ExpressionStatement() : {}
+{
+	try
+	{
+	Expression()  ";"
+	}
+	catch (ParseException e) {
+    System.out.println(e.toString());
+    Token t;
+	recoveredErrors++;
+    do {
+		t = getNextToken();
+    } while (t.image != ";");
+  }
+
+}
+
+void Expression() : {}
+{
+	SubExpression() ( "," SubExpression() )*
+}
+
+void SubExpression() : {}
+{
+	LOOKAHEAD(LValue() AssignmentOperator()) (LValue() AssignmentOperator() { currentOperationType = rvalue_type; }(LOOKAHEAD(LValue() AssignmentOperator()) SubExpression() | Operation())) 
+	|
+	(
+		{
+			currentOperationType = "";
+		}
+		Operation()
+		{
+			currentOperationType = "";
+		}
+	)
+
+}
+
+void LValue():{Token t;}
+{
+       
+	t = <IDENTIFIER>
+	{
+		if(!currentNode.isDefinedVar(t.image))
+		{
+			recoveredErrors++;
+			System.out.println("Undefined variable at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		var_being_accessed = t.image;
+		jjtThis.val = t.image; 
+		rvalue_type = currentNode.getVarType(t.image);
+		
+		
+		
+	}
+	[
+		StructVarAccess()
+        | 
+		ArrayAccess()
+	]
+	{
+		if(currentOperationType.equals(""))
+		{
+			currentOperationType = rvalue_type;
+		}
+	}
+}
+
+void StructVarAccess() : {Token t;}
+{
+	"."
+	t = <IDENTIFIER>
+	{ 
+		if(!currentNode.isDefinedStructType(currentNode.getVarType(var_being_accessed)))
+		{
+			recoveredErrors++;
+			System.out.println("Struct access in a non struct variable at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		else
+		{
+			if(!currentNode.isDefinedStructVar(currentNode.getVarType(var_being_accessed), t.image))
+			{
+				recoveredErrors++;
+				System.out.println("Undefined variable in struct at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+		}
+		jjtThis.val = t.image;
+	}
+}
+
+void ArrayAccess() : {Token t; String aux, aux2, aux3;} 
+{
+	{
+		aux = currentOperationType;
+		currentOperationType = "int";
+		aux2 = rvalue_type;
+		aux3 = var_being_accessed;
+	}
+	"[" 
+	Operation()
+	"]"
+	{
+		var_being_accessed = aux3;
+		if(!currentNode.isDefinedArrayVar(var_being_accessed))
+		{
+			recoveredErrors++;
+			System.out.println("Array access in a non array variable at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		rvalue_type = aux2;
+		rvalue_type = rvalue_type.substring(1);
+		currentOperationType = aux;
+	}
+}
+
+void Operation() : {}
+{	
+	TernaryOperation() 
+}
+
+void TernaryOperation() #void : {}
+{
+	LogicOperation() [ "?" TernaryOperation() ":" TernaryOperation()  #TernaryOperation(3)]
+}
+
+void LogicOperation() #void : {}
+{	
+	ComparativeOperation() [ LogicOperator() LogicOperation() #Logic(3)]
+}
+
+void ComparativeOperation() #void: {}
+{
+	ShiftOperation() [ ComparativeOperator() ComparativeOperation() #Comparative(3)]
+}
+
+void ShiftOperation() #void: {}
+{
+	AdditiveOperation() [ ShiftOperator() ShiftOperation() #Shift(3) ]
+}
+
+void AdditiveOperation() #void: {}
+{
+	MultiplicativeOperation() [  AdditiveOperator() AdditiveOperation() #Additive(3) ]
+}
+
+
+
+void MultiplicativeOperation() #void: {}
+{
+	UnaryOperation() 
+	[ MultiplicativeOperator() MultiplicativeOperation() #Multiplicative(3) ]
+}
+void UnaryOperation() #void: {}
+{
+	 LOOKAHEAD(UnaryOperator())( UnaryOperator() RValue() #UnaryOperation(2))
+	 |
+	 RValue()
+}
+
+void RValue() : {}
+{
+	(
+	LOOKAHEAD( FunctionCall() ) FunctionCall()
+	| Constant()
+	| "(" Operation() ")"
+	| PreIncrement()
+	| StringConstant()
+	| LOOKAHEAD(PostIncrement()) PostIncrement()
+	| LValue()
+	)
+	{
+		if(currentOperationType.equals(""))
+			currentOperationType = rvalue_type;
+		if(!((rvalue_type.equals("float") || rvalue_type.equals("int")) && (currentOperationType.equals("float") || currentOperationType.equals("int"))))
+		{ 
+			if(!rvalue_type.equals(currentOperationType))
+			{
+				System.out.println("Operations with types, " + rvalue_type + " and " + currentOperationType + ", are not implemented, at line " + token.beginLine + ", column " + token.beginColumn);
+				recoveredErrors++;
+			}
+		}
+			
+	}
+}
+
+void PreIncrement() : {Token t;}
+{
+		
+		(t = "++" | t = "--")LValue()
+		{
+			if(!rvalue_type.equals("float") && !rvalue_type.equals("int"))
+			{
+				recoveredErrors++;
+				System.out.println("Incorrect type " + rvalue_type + " for variable being incremented at line " + token.beginLine + ", column " + token.beginColumn);
+			}
+			jjtThis.val = t.image;
+		}
+}
+
+void PostIncrement() : {Token t;}
+{
+		
+		LValue()(t = "++" | t = "--") 
+		{
+			if(!rvalue_type.equals("float") && !rvalue_type.equals("int"))
+			{
+				recoveredErrors++;
+				System.out.println("Incorrect type " + rvalue_type + " for variable being incremented" + token.beginLine + ", column " + token.beginColumn);
+			}
+			jjtThis.val = t.image;
+		}
+}
+
+void StringConstant() :{Token t;}
+{
+		t = <STRING_LITERAL>
+		{	
+			jjtThis.val = t.image;
+			rvalue_type = "String";
+		}
+}
+
+void FunctionCall() : {Token t1, t2, t3; String aux;}
+{
+
+	FunctionIdentifier()
+	{
+		function_call_error = false;
+		if(!currentNode.isDefinedFunctionName(function_being_called))
+		{
+			function_call_error = true;
+			recoveredErrors++;
+			System.out.println("Undefined function at line " + token.beginLine + ", column " + token.beginColumn);
+		}
+		expected_parameters.push(currentNode.getParametersList(function_being_called));
+		expected_parameters_indexes.push(0);
+		aux = currentOperationType;	
+	}
+	"("
+	ParameterList()
+	")"
+	{
+		currentOperationType = aux;
+	}
+	{
+		if(!function_call_error)
+			rvalue_type = currentNode.getFunctionReturnType(function_being_called);
+		else
+		{
+			rvalue_type = "";
+		}
+		function_call_error = false;
+		expected_parameters.pop();
+		expected_parameters_indexes.pop();
+	}
+}
+
+void UnaryOperator() : {Token t;}
+{
+	(("(" (t = <FLOAT> | t = <INT> )")") | t = "!" | t = "~" | t = "-" )
+	{
+		jjtThis.val = t.image;
+		op = t.image;
+	}
+}
+void LogicOperator()  : {Token t;}
+{
+	( t = "&&" | t = "||" | t = "&" | t = "|" | t = "^" )
+	{
+		jjtThis.val = t.image;
+		op = t.image;
+	}
+}
+
+void ComparativeOperator() : {Token t;}
+{
+	( t = "==" | t = "!=" | t = "<" | t = "<=" | t = ">" | t = ">=" )
+	{
+		jjtThis.val = t.image;	
+		op = t.image;
+	}
+}
+
+void ShiftOperator() : {Token t;}
+{
+	( t = "<<" | t = ">>" )
+	{
+		jjtThis.val = t.image;
+		op = t.image;
+	}
+}
+
+void AdditiveOperator() : {Token t;}
+{
+	( t = "+" | t = "-" )
+	{
+		jjtThis.val = t.image;
+		op = t.image;
+	}	
+	
+}
+
+void MultiplicativeOperator() : {Token t;}
+{
+	( t = "*" | t = "/" | t = "%")
+	{
+		jjtThis.val = t.image;
+		op = t.image;
+	}
+}
+
+void AssignmentOperator()  : {Token t;}
+{
+	( t = "=" | t = "*=" | t = "/=" | t = "%=" | t = "+=" | t = "-=" | t = "<<=" | t = ">>=" | t = "&=" | t = "^=" | t = "|=" )
+	{
+	    jjtThis.val = t.image;
+		op = t.image;
+	   
+	}
+}
+void Constant() : {Token t;}
+{
+	(
+		t = <INTEGER_LITERAL>
+		{
+			if(currentOperationType.equals("float"))
+			{
+				rvalue_type = "float";
+			}
+			else
+			{
+				rvalue_type = "int";
+			}
+		}
+		| 
+		t = <FLOATING_POINT_LITERAL>
+		{
+			if(currentOperationType.equals("int"))
+			{
+				rvalue_type = "int";
+			}
+			else
+			{
+				rvalue_type = "float";
+			}
+		} 
+		| 
+		t = <CHARACTER_LITERAL>
+		{
+			rvalue_type = "char";
+		}
+		|
+		t = <INTEGER_ARRAY>
+		{
+			rvalue_type = "int";
+		}
+		|
+		t = <FLOAT_ARRAY>
+		{
+			rvalue_type = "int";
+		}
+		
+	)
+	{
+		jjtThis.val = t.image;
+		
+	}
+}
+

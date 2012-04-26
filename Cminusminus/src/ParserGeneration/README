@@ -1,0 +1,5 @@
+To create the parser, run generate.bat. 
+
+You then need to copy all generated *.java files into CodeGenerator/Parser.
+
+These generated java files will be used by the code generator to create the final compiler.
