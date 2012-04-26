@@ -13,9 +13,14 @@
     
     
     <target name="-pre-compile">
-        <echo>Classpath: ${toString:compile.classpath}</echo>
         <exec dir="." executable="cmd">
             <arg line="/c GenerateParser.bat"/>
+        </exec>
+    </target>
+    
+    <target name="-post-jar">
+        <exec dir="." executable="cmd">
+            <arg line="/c CopyJarAndRunTests.bat"/>
         </exec>
     </target>
     
